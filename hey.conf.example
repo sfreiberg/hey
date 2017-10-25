@@ -1,0 +1,14 @@
+[plivo]
+auth_id = "XYZ...123"
+auth_token = "XYZ...123"
+to = "18885551234"
+from = "18885551234"
+
+[twilio]
+account_sid = "XYZ...123"
+auth_token = "XYZ...123"
+to = "+18885551234"
+from = "+18885551234"
+
+[slack]
+url = "https://hooks.slack.com/services/ABC...XYZ/ABC...XYZ"
