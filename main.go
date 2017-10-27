@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -26,7 +25,7 @@ type Sender interface {
 }
 
 type Result struct {
-	*exec.Cmd
+	cmd   *exec.Cmd
 	Start time.Time
 	End   time.Time
 	Err   error
@@ -38,7 +37,20 @@ func (r *Result) Duration() time.Duration {
 
 // Returns the command with arguments
 func (r *Result) Command() string {
-	return strings.Join(r.Cmd.Args, " ")
+	return strings.Join(r.cmd.Args, " ")
+}
+
+func (r *Result) Success() bool {
+	// If the user didn't supply a command we'll consider that a success
+	if r.Command() == "" {
+		return true
+	}
+
+	if r.Err != nil || r.cmd.ProcessState.Success() == false {
+		return false
+	}
+
+	return true
 }
 
 type Config struct {
@@ -194,7 +206,7 @@ func main() {
 
 	// TODO: Try to preserve the exit code if possible. Need to find a cross
 	// platform way to handle it. For now I'm taking the easy road.
-	if len(errs) > 0 || !res.Cmd.ProcessState.Success() {
+	if len(errs) > 0 || !res.Success() {
 		os.Exit(1)
 	}
 }
@@ -203,20 +215,17 @@ func run() *Result {
 	res := &Result{Start: time.Now()}
 
 	if len(os.Args) == 1 {
-		res.Err = errors.New("You must suplly a command to run")
-		return res
-	}
-
-	if len(os.Args) == 2 {
-		res.Cmd = exec.Command(os.Args[1])
+		res.cmd = exec.Command("")
+	} else if len(os.Args) == 2 {
+		res.cmd = exec.Command(os.Args[1])
 	} else {
-		res.Cmd = exec.Command(os.Args[1], os.Args[2:]...)
+		res.cmd = exec.Command(os.Args[1], os.Args[2:]...)
 	}
 
-	res.Cmd.Stdin = os.Stdin
-	res.Cmd.Stdout = os.Stdout
-	res.Cmd.Stderr = os.Stderr
-	res.Err = res.Cmd.Run()
+	res.cmd.Stdin = os.Stdin
+	res.cmd.Stdout = os.Stdout
+	res.cmd.Stderr = os.Stderr
+	res.Err = res.cmd.Run()
 	res.End = time.Now()
 
 	return res
