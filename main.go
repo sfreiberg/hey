@@ -94,7 +94,7 @@ func (s *Slack) Send(res *Result) error {
 	payload := &Payload{Username: "Hey!"}
 
 	if s.Template == "" {
-		tmpl = "{% if result.Cmd.ProcessState.Success() %}:thumbsup:{% else %}:thumbsdown:{% endif %} Finished `{{ result.Command() }}` at {{ result.End|time:\"2006/1/_2 15:04:05PM\" }} in {{ result.Duration().String() }}"
+		tmpl = "{% if result.Success() %}:thumbsup:{% else %}:thumbsdown:{% endif %} `{{ result.Command() }}` {% if result.Success() %}succeeded{% else %}failed{% endif %} at {{ result.End|time:\"2006/1/_2 15:04:05PM\" }} in {{ result.Duration().String() }}"
 	} else {
 		tmpl = s.Template
 	}
