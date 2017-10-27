@@ -9,7 +9,7 @@ Create a config file named .hey.toml in the root of your home directory. For an
 example see the hey.conf.example in the github repo. Download the appropriate
 binary and put it in your path.
 
-`sh
+`
 $ hey sleep 10
 `
 
@@ -26,6 +26,7 @@ $ hey sleep 10
 	* Web callbacks
 	* Logstash
 * Monitor an existing process. Ex: hey -p 3517
+* Run notifications in parellel
 
 ## License
 Hey is licensed under the MIT license.
