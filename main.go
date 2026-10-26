@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/flosch/pongo2/v6"
 	"github.com/sfreiberg/gotwilio"
 	"github.com/sfreiberg/plivo"
-	"gopkg.in/flosch/pongo2.v3"
 )
 
 var config *Config
@@ -99,7 +99,11 @@ func (s *Slack) Send(res *Result) error {
 		tmpl = s.Template
 	}
 
-	payload.Text = pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	text, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	if err != nil {
+		return err
+	}
+	payload.Text = text
 
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
@@ -140,10 +144,13 @@ func (t *Twilio) Send(res *Result) error {
 		tmpl = t.Template
 	}
 
-	msg := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	if err != nil {
+		return err
+	}
 
 	twilio := gotwilio.NewTwilioClient(t.AccountSid, t.AuthToken)
-	_, _, err := twilio.SendSMS(t.From, t.To, msg, "", "")
+	_, _, err = twilio.SendSMS(t.From, t.To, msg, "", "")
 	return err
 }
 
@@ -164,7 +171,10 @@ func (p *Plivo) Send(res *Result) error {
 		tmpl = p.Template
 	}
 
-	msg := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	if err != nil {
+		return err
+	}
 
 	m := &plivo.Message{
 		Src:  p.From,
@@ -173,7 +183,7 @@ func (p *Plivo) Send(res *Result) error {
 	}
 
 	client := &plivo.Client{AuthID: p.AuthId, AuthToken: p.AuthToken}
-	_, err := client.Message(m) // TODO: Determine if the response is useful
+	_, err = client.Message(m) // TODO: Determine if the response is useful
 
 	return err
 }
