@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/sfreiberg/gotwilio v1.1.0
-	github.com/sfreiberg/plivo v0.0.0-20171018061842-ae3f5e10b310
+	github.com/sfreiberg/plivo v0.0.0-20261026203133-3e33171ae1fc
 )
 
 require (
