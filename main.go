@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,7 +24,18 @@ var config *Config
 
 // httpClient is used for all notification requests. It is a variable so
 // tests can redirect requests to a local server.
-var httpClient = &http.Client{}
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// render executes a pongo2 template with res available as "result". Unlike
+// pongo2.RenderTemplateString it reports template syntax errors instead of
+// panicking.
+func render(tmpl string, res *Result) (string, error) {
+	t, err := pongo2.FromString(tmpl)
+	if err != nil {
+		return "", err
+	}
+	return t.Execute(pongo2.Context{"result": res})
+}
 
 type Sender interface {
 	Send(res *Result) error
@@ -103,7 +116,7 @@ func (s *Slack) Send(res *Result) error {
 		tmpl = s.Template
 	}
 
-	text, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	text, err := render(tmpl, res)
 	if err != nil {
 		return err
 	}
@@ -123,9 +136,14 @@ func (s *Slack) Send(res *Result) error {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("slack: unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
 
 	return nil
 }
@@ -147,13 +165,16 @@ func (t *Twilio) Send(res *Result) error {
 		tmpl = t.Template
 	}
 
-	msg, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := render(tmpl, res)
 	if err != nil {
 		return err
 	}
 
 	twilio := gotwilio.NewTwilioClientCustomHTTP(t.AccountSid, t.AuthToken, httpClient)
-	_, _, err = twilio.SendSMS(t.From, t.To, msg, "", "")
+	_, exception, err := twilio.SendSMS(t.From, t.To, msg, "", "")
+	if exception != nil {
+		return fmt.Errorf("twilio: %w", *exception)
+	}
 	return err
 }
 
@@ -174,7 +195,7 @@ func (p *Plivo) Send(res *Result) error {
 		tmpl = p.Template
 	}
 
-	msg, err := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := render(tmpl, res)
 	if err != nil {
 		return err
 	}
@@ -186,9 +207,15 @@ func (p *Plivo) Send(res *Result) error {
 	}
 
 	client := &plivo.Client{AuthID: p.AuthId, AuthToken: p.AuthToken, HTTPClient: httpClient}
-	_, err = client.Message(m) // TODO: Determine if the response is useful
+	resp, err := client.Message(m)
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("plivo: %s", resp.Error)
+	}
 
-	return err
+	return nil
 }
 
 func main() {

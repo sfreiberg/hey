@@ -217,3 +217,48 @@ func TestPlivoSend(t *testing.T) {
 		t.Errorf("unexpected message: %+v", m)
 	}
 }
+
+func TestSendersReportErrors(t *testing.T) {
+	t.Run("slack bad status", func(t *testing.T) {
+		fakeService(t, http.StatusForbidden, "invalid_token")
+		err := (&Slack{URL: "https://hooks.slack.com/x"}).Send(result(t, "true"))
+		if err == nil || !strings.Contains(err.Error(), "invalid_token") {
+			t.Errorf("err = %v; want slack error", err)
+		}
+	})
+	t.Run("slack unreachable", func(t *testing.T) {
+		orig := httpClient
+		httpClient = &http.Client{Transport: redirect{&url.URL{Scheme: "http", Host: "127.0.0.1:1"}}}
+		t.Cleanup(func() { httpClient = orig })
+		if err := (&Slack{URL: "https://hooks.slack.com/x"}).Send(result(t, "true")); err == nil {
+			t.Error("expected a connection error")
+		}
+	})
+	t.Run("twilio exception", func(t *testing.T) {
+		fakeService(t, http.StatusUnauthorized, `{"code": 20003, "message": "Authenticate", "status": 401}`)
+		err := (&Twilio{AccountSid: "AC1", AuthToken: "bad"}).Send(result(t, "true"))
+		if err == nil || !strings.Contains(err.Error(), "Authenticate") {
+			t.Errorf("err = %v; want twilio exception", err)
+		}
+	})
+	t.Run("plivo error", func(t *testing.T) {
+		fakeService(t, http.StatusBadRequest, `{"api_id": "a1", "error": "invalid dst"}`)
+		err := (&Plivo{AuthId: "MA1", AuthToken: "x"}).Send(result(t, "true"))
+		if err == nil || !strings.Contains(err.Error(), "invalid dst") {
+			t.Errorf("err = %v; want plivo error", err)
+		}
+	})
+}
+
+func TestBadTemplateReturnsError(t *testing.T) {
+	fakeService(t, 200, "ok")
+	for _, s := range []Sender{
+		&Slack{URL: "https://hooks.slack.com/x", Template: "{% if %}"},
+		&Twilio{Template: "{{ result.Command("},
+		&Plivo{Template: "{% for %}"},
+	} {
+		if err := s.Send(result(t, "true")); err == nil {
+			t.Errorf("%T: expected an error for an invalid template", s)
+		}
+	}
+}
