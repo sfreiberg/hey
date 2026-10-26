@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,12 +15,27 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/flosch/pongo2/v6"
 	"github.com/sfreiberg/gotwilio"
 	"github.com/sfreiberg/plivo"
-	"gopkg.in/flosch/pongo2.v3"
 )
 
 var config *Config
+
+// httpClient is used for all notification requests. It is a variable so
+// tests can redirect requests to a local server.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// render executes a pongo2 template with res available as "result". Unlike
+// pongo2.RenderTemplateString it reports template syntax errors instead of
+// panicking.
+func render(tmpl string, res *Result) (string, error) {
+	t, err := pongo2.FromString(tmpl)
+	if err != nil {
+		return "", err
+	}
+	return t.Execute(pongo2.Context{"result": res})
+}
 
 type Sender interface {
 	Send(res *Result) error
@@ -99,7 +116,11 @@ func (s *Slack) Send(res *Result) error {
 		tmpl = s.Template
 	}
 
-	payload.Text = pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	text, err := render(tmpl, res)
+	if err != nil {
+		return err
+	}
+	payload.Text = text
 
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
@@ -113,12 +134,16 @@ func (s *Slack) Send(res *Result) error {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("slack: unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
 
 	return nil
 }
@@ -140,10 +165,16 @@ func (t *Twilio) Send(res *Result) error {
 		tmpl = t.Template
 	}
 
-	msg := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := render(tmpl, res)
+	if err != nil {
+		return err
+	}
 
-	twilio := gotwilio.NewTwilioClient(t.AccountSid, t.AuthToken)
-	_, _, err := twilio.SendSMS(t.From, t.To, msg, "", "")
+	twilio := gotwilio.NewTwilioClientCustomHTTP(t.AccountSid, t.AuthToken, httpClient)
+	_, exception, err := twilio.SendSMS(t.From, t.To, msg, "", "")
+	if exception != nil {
+		return fmt.Errorf("twilio: %w", *exception)
+	}
 	return err
 }
 
@@ -164,7 +195,10 @@ func (p *Plivo) Send(res *Result) error {
 		tmpl = p.Template
 	}
 
-	msg := pongo2.RenderTemplateString(tmpl, pongo2.Context{"result": res})
+	msg, err := render(tmpl, res)
+	if err != nil {
+		return err
+	}
 
 	m := &plivo.Message{
 		Src:  p.From,
@@ -172,22 +206,29 @@ func (p *Plivo) Send(res *Result) error {
 		Text: msg,
 	}
 
-	client := &plivo.Client{AuthID: p.AuthId, AuthToken: p.AuthToken}
-	_, err := client.Message(m) // TODO: Determine if the response is useful
-
-	return err
-}
-
-func init() {
-	var err error
-	config, err = loadConfig()
+	client := &plivo.Client{AuthID: p.AuthId, AuthToken: p.AuthToken, HTTPClient: httpClient}
+	resp, err := client.Message(m)
 	if err != nil {
-		log.Fatalf("Error loading config: %s\n", err)
+		return err
 	}
+	if resp.Error != "" {
+		return fmt.Errorf("plivo: %s", resp.Error)
+	}
+
+	return nil
 }
 
 func main() {
-	res := run()
+	path, err := defaultConfigPath()
+	if err != nil {
+		log.Fatalf("Error loading config: %s\n", err)
+	}
+	config, err = loadConfig(path)
+	if err != nil {
+		log.Fatalf("Error loading config: %s\n", err)
+	}
+
+	res := run(os.Args)
 
 	errs := []error{}
 
@@ -211,15 +252,16 @@ func main() {
 	}
 }
 
-func run() *Result {
+// run executes args[1:] (args is os.Args) and records the result.
+func run(args []string) *Result {
 	res := &Result{Start: time.Now()}
 
-	if len(os.Args) == 1 {
+	if len(args) == 1 {
 		res.cmd = exec.Command("")
-	} else if len(os.Args) == 2 {
-		res.cmd = exec.Command(os.Args[1])
+	} else if len(args) == 2 {
+		res.cmd = exec.Command(args[1])
 	} else {
-		res.cmd = exec.Command(os.Args[1], os.Args[2:]...)
+		res.cmd = exec.Command(args[1], args[2:]...)
 	}
 
 	res.cmd.Stdin = os.Stdin
@@ -233,17 +275,19 @@ func run() *Result {
 
 // TODO: Currently loads from $HOME/.hey.toml. Add the ability to fallback to
 // the current working directory if that fails.
-func loadConfig() (*Config, error) {
-	c := &Config{}
-
+func defaultConfigPath() (string, error) {
 	u, err := user.Current()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	path := filepath.Join(u.HomeDir, ".hey.toml")
+	return filepath.Join(u.HomeDir, ".hey.toml"), nil
+}
 
-	_, err = toml.DecodeFile(path, c)
+func loadConfig(path string) (*Config, error) {
+	c := &Config{}
+
+	_, err := toml.DecodeFile(path, c)
 
 	return c, err
 }
